@@ -23,31 +23,33 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
-      # 1. Assume AWS role via OIDC
+      # Assume AWS Role via OIDC
       - name: Configure AWS credentials
         uses: aws-actions/configure-aws-credentials@v2
         with:
           role-to-assume: ${{ secrets.AWS_ROLE_TO_ASSUME }}
           aws-region: ${{ env.AWS_REGION }}
 
-      # 2. Ensure ECR repository exists
+      # Ensure ECR repo exists
       - name: Ensure ECR repository exists
         run: |
+          set -e
           aws ecr describe-repositories --repository-names $ECR_REPOSITORY \
           || aws ecr create-repository --repository-name $ECR_REPOSITORY
 
-      # 3. Login to ECR
+      # Login to ECR
       - name: Login to Amazon ECR
         run: |
           aws ecr get-login-password --region $AWS_REGION \
           | docker login \
-              --username AWS \
-              --password-stdin \
-              $AWS_ACCOUNT_ID.dkr.ecr.$AWS_REGION.amazonaws.com
+            --username AWS \
+            --password-stdin \
+            $AWS_ACCOUNT_ID.dkr.ecr.$AWS_REGION.amazonaws.com
 
-      # 4. Build, Tag, Push Image
+      # Build and push image
       - name: Build and Push Image
         run: |
+          set -e
           IMAGE_TAG=${{ github.sha }}
           IMAGE_URI=$AWS_ACCOUNT_ID.dkr.ecr.$AWS_REGION.amazonaws.com/$ECR_REPOSITORY:$IMAGE_TAG
 
@@ -56,35 +58,34 @@ jobs:
 
           echo "IMAGE_URI=$IMAGE_URI" >> $GITHUB_ENV
 
-      # 5. Install kubectl
+      # Install kubectl
       - name: Install kubectl
         uses: azure/setup-kubectl@v3
 
-      # 6. Update kubeconfig
+      # Update kubeconfig
       - name: Update kubeconfig
         run: |
           aws eks update-kubeconfig \
             --name $EKS_CLUSTER_NAME \
             --region $AWS_REGION
 
-      # 7. Deploy to EKS
+      # Deploy
       - name: Deploy to EKS
         run: |
+          set -e
+
           if [ ! -f k8s/orders-deployment.yaml ]; then
-            echo "ERROR: k8s/orders-deployment.yaml not found"
+            echo "k8s/orders-deployment.yaml not found"
             exit 1
           fi
 
-          # Apply base manifest
           kubectl apply -f k8s/orders-deployment.yaml
 
-          # Update image to new SHA
           kubectl set image deployment/orders orders=$IMAGE_URI
 
-          # Wait for rollout to finish
           kubectl rollout status deployment/orders --timeout=180s
 
-      # 8. Post-deployment verification
+      # Verify
       - name: Verify Deployment
         run: |
           kubectl get deployment orders
